@@ -180,9 +180,9 @@ namespace RT64 {
             int width, height;
             stbi_uc *data = stbi_load_from_memory(fileBytes.data(), fileBytes.size(), &width, &height, nullptr, 4);
             if (data != nullptr) {
-                int rowPitch = width * 4;
-                size_t byteCount = height * rowPitch;
-                TextureCache::setRGBA32(replacementTexture, worker, data, byteCount, width, height, rowPitch, dstUploadResource, resourcePool);
+                uint32_t rowPitch = uint32_t(width) * 4;
+                size_t byteCount = uint32_t(height) * rowPitch;
+                TextureCache::setRGBA32(replacementTexture, worker, data, byteCount, uint32_t(width), uint32_t(height), rowPitch, dstUploadResource, resourcePool);
                 stbi_image_free(data);
                 loadedTexture = true;
             }
@@ -400,7 +400,7 @@ namespace RT64 {
         threadResourcePool.reset(nullptr);
     }
     
-    void TextureCache::setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, int width, int height, int rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool) {
+    void TextureCache::setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, uint32_t width, uint32_t height, uint32_t rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool) {
         assert(dstTexture != nullptr);
         assert(worker != nullptr);
         assert(bytes != nullptr);
@@ -432,7 +432,7 @@ namespace RT64 {
         else {
             const uint8_t *srcData = reinterpret_cast<const uint8_t *>(bytes);
             size_t offset = 0;
-            while ((offset + rowPitch) <= (size_t)byteCount) {
+            while ((offset + size_t(rowPitch)) <= byteCount) {
                 memcpy(dstData, srcData, rowPitch);
                 srcData += rowPitch;
                 offset += rowPitch;

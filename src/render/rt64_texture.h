@@ -12,9 +12,9 @@ namespace RT64 {
         std::unique_ptr<RenderTexture> texture;
         std::unique_ptr<RenderTexture> tmem;
         RenderFormat format = RenderFormat::UNKNOWN;
-        int width = 0;
-        int height = 0;
-        int mipmaps = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t mipmaps = 0;
 
         // These are only stored if developer mode is enabled.
         std::vector<uint8_t> bytesTMEM;

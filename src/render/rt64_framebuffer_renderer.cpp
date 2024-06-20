@@ -1218,7 +1218,7 @@ namespace RT64 {
 
         bool depthState = false;
         worker->commandList->setFramebuffer(targetDrawCall.fbStorage->colorDepthWrite.get());
-        for (const auto& pair : targetDrawCall.sceneIndices) {
+        for (const auto &pair : targetDrawCall.sceneIndices) {
 #       if RT_ENABLED
             if (pair.second) {
                 const auto &rtScene = targetDrawCall.rtScenes[pair.first];
@@ -1622,9 +1622,9 @@ namespace RT64 {
                             triangles.viewport = rawViewportWide;
                             break;
                         }
-                        case Projection::Type::None: {
+                        case Projection::Type::None:
+                        default:
                             break;
-                        }
                         }
 
                         triangles.scissor = convertFixedRect(call.callDesc.scissorRect, p.resolutionScale, p.fbWidth, invRatioScale, extOriginPercentage, int32_t(horizontalMisalignment), call.callDesc.scissorLeftOrigin, call.callDesc.scissorRightOrigin);

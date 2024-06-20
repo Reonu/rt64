@@ -38,8 +38,8 @@ namespace RT64 {
     struct TextureUpload {
         uint64_t hash;
         uint64_t creationFrame;
-        int width;
-        int height;
+        uint32_t width;
+        uint32_t height;
         uint32_t tlut;
         LoadTile loadTile;
         std::vector<uint8_t> bytesTMEM;
@@ -145,7 +145,7 @@ namespace RT64 {
         void incrementLock();
         void decrementLock();
         Texture *getTexture(uint32_t textureIndex);
-        static void setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, int width, int height, int rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr);
+        static void setRGBA32(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, uint32_t width, uint32_t height, uint32_t rowPitch, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr);
         static bool setDDS(Texture *dstTexture, RenderWorker *worker, const uint8_t *bytes, size_t byteCount, std::unique_ptr<RenderBuffer> &dstUploadResource, RenderPool *uploadResourcePool = nullptr, uint32_t minMipWidth = 0, uint32_t minMipHeight = 0);
         static bool loadBytesFromPath(const std::filesystem::path &path, std::vector<uint8_t> &bytes);
     };
