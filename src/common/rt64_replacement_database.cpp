@@ -4,6 +4,8 @@
 
 #include "rt64_replacement_database.h"
 
+#include <inttypes.h>
+
 namespace RT64 {
     // ReplacementDatabase
 
@@ -48,13 +50,13 @@ namespace RT64 {
 
     std::string ReplacementDatabase::hashToString(uint32_t hash) {
         char hexStr[32];
-        snprintf(hexStr, sizeof(hexStr), "%08lx", hash);
+        snprintf(hexStr, sizeof(hexStr), "%08x", hash);
         return std::string(hexStr);
     }
 
     std::string ReplacementDatabase::hashToString(uint64_t hash) {
         char hexStr[32];
-        snprintf(hexStr, sizeof(hexStr), "%016llx", hash);
+        snprintf(hexStr, sizeof(hexStr), "%016" PRIx64, hash);
         return std::string(hexStr);
     }
 
