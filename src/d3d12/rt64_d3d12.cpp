@@ -299,18 +299,23 @@ namespace RT64 {
             return D3D12_LOGIC_OP_CLEAR;
         }
     }
-
-    static D3D12_FILTER toFilter(RenderFilter minFilter, RenderFilter magFilter, RenderMipmapMode mipmapMode, bool comparisonEnabled) {
+    
+    static D3D12_FILTER toFilter(RenderFilter minFilter, RenderFilter magFilter, RenderMipmapMode mipmapMode, bool anisotropyEnabled, bool comparisonEnabled) {
         assert(minFilter != RenderFilter::UNKNOWN);
         assert(magFilter != RenderFilter::UNKNOWN);
         assert(mipmapMode != RenderMipmapMode::UNKNOWN);
-        
-        uint32_t filterInt = 0;
-        filterInt |= (mipmapMode == RenderMipmapMode::LINEAR) ? 0x1 : 0x0;
-        filterInt |= (magFilter == RenderFilter::LINEAR) ? 0x4 : 0x0;
-        filterInt |= (minFilter == RenderFilter::LINEAR) ? 0x10 : 0x0;
-        filterInt |= comparisonEnabled ? 0x80 : 0x0;
-        return D3D12_FILTER(filterInt);
+
+        if (anisotropyEnabled) {
+            return comparisonEnabled ? D3D12_FILTER_COMPARISON_ANISOTROPIC : D3D12_FILTER_ANISOTROPIC;
+        }
+        else {
+            uint32_t filterInt = 0;
+            filterInt |= (mipmapMode == RenderMipmapMode::LINEAR) ? 0x1 : 0x0;
+            filterInt |= (magFilter == RenderFilter::LINEAR) ? 0x4 : 0x0;
+            filterInt |= (minFilter == RenderFilter::LINEAR) ? 0x10 : 0x0;
+            filterInt |= comparisonEnabled ? 0x80 : 0x0;
+            return D3D12_FILTER(filterInt);
+        }
     }
 
     static D3D12_TEXTURE_ADDRESS_MODE toD3D12(RenderTextureAddressMode addressMode) {
@@ -2405,7 +2410,7 @@ namespace RT64 {
         this->borderColor = desc.borderColor;
         this->shaderVisibility = desc.shaderVisibility;
 
-        samplerDesc.Filter = toFilter(desc.minFilter, desc.magFilter, desc.mipmapMode, desc.comparisonEnabled);
+        samplerDesc.Filter = toFilter(desc.minFilter, desc.magFilter, desc.mipmapMode, desc.anisotropyEnabled, desc.comparisonEnabled);
         samplerDesc.AddressU = toD3D12(desc.addressU);
         samplerDesc.AddressV = toD3D12(desc.addressV);
         samplerDesc.AddressW = toD3D12(desc.addressW);
