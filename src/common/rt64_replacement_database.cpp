@@ -72,8 +72,10 @@ namespace RT64 {
     }
 
     void to_json(json &j, const ReplacementConfiguration &config) {
+        // Always update the configuration version to the latest one when saving.
+        ReplacementConfiguration defaultConfig;
         j["autoPath"] = config.autoPath;
-        j["configurationVersion"] = config.configurationVersion;
+        j["configurationVersion"] = defaultConfig.configurationVersion;
         j["hashVersion"] = config.hashVersion;
     }
 
