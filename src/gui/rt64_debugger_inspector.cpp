@@ -1079,7 +1079,7 @@ namespace RT64 {
                                         }
                                         else {
                                             char hexStr[64];
-                                            snprintf(hexStr, sizeof(hexStr), "%016llx", callTile.tmemHashOrID);
+                                            snprintf(hexStr, sizeof(hexStr), "%016" PRIx64, callTile.tmemHashOrID);
                                             ImGui::Text("XXH3 0x%s", hexStr);
                                             ImGui::SameLine();
 

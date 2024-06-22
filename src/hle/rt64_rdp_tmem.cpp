@@ -5,6 +5,7 @@
 #include "rt64_rdp_tmem.h"
 
 #include <cassert>
+#include <cinttypes>
 
 #include "xxHash/xxh3.h"
 
@@ -67,7 +68,7 @@ namespace RT64 {
         
         // Dump the entirety of TMEM.
         char baseName[64];
-        snprintf(baseName, sizeof(baseName), "%016llx.v%u", hash, TMEMHasher::CurrentHashVersion);
+        snprintf(baseName, sizeof(baseName), "%016" PRIx64 ".v%u", hash, TMEMHasher::CurrentHashVersion);
         std::filesystem::path dumpTmemPath = state->dumpingTexturesDirectory / (std::string(baseName) + ".tmem");
         std::ofstream dumpTmemStream(dumpTmemPath, std::ios::binary);
         if (dumpTmemStream.is_open()) {

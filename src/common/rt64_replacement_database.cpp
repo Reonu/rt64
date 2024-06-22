@@ -4,7 +4,7 @@
 
 #include "rt64_replacement_database.h"
 
-#include <inttypes.h>
+#include <cinttypes>
 
 namespace RT64 {
     // ReplacementDatabase
