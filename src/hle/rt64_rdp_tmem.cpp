@@ -6,6 +6,10 @@
 
 #include <cassert>
 
+#include "xxHash/xxh3.h"
+
+#include "common/rt64_tmem_hasher.h"
+
 #include "rt64_state.h"
 
 namespace RT64 {
@@ -23,7 +27,7 @@ namespace RT64 {
             hashSet.insert(hash);
             textureCache->queueGPUUploadTMEM(hash, creationFrame, TMEM, RDP_TMEM_BYTES, width, height, 0, LoadTile(), false);
         }
-
+        
         // Dump memory contents into a file if the process is active.
         if (!state->dumpingTexturesDirectory.empty()) {
             // Since width and height are not exactly guaranteed to be sane values when using raw TMEM, ensure we only dump textures when the values make sense.
@@ -38,52 +42,8 @@ namespace RT64 {
     }
 
     uint64_t TextureManager::uploadTexture(State *state, const LoadTile &loadTile, TextureCache *textureCache, uint64_t creationFrame, uint16_t width, uint16_t height, uint32_t tlut) {
-        XXH3_state_t xxh3;
-        XXH3_64bits_reset(&xxh3);
-        const bool RGBA32 = (loadTile.siz == G_IM_SIZ_32b) && (loadTile.fmt == G_IM_FMT_RGBA);
         const uint8_t *TMEM = reinterpret_cast<const uint8_t *>(state->rdp->TMEM);
-        const uint32_t tmemSize = RGBA32 ? (RDP_TMEM_BYTES >> 1) : RDP_TMEM_BYTES;
-        const uint32_t lastRowBytes = width << std::min(loadTile.siz, uint8_t(G_IM_SIZ_16b)) >> 1;
-        const uint32_t bytesToHash = (loadTile.line << 3) * (height - 1) + lastRowBytes;
-        const uint32_t tmemMask = RGBA32 ? RDP_TMEM_MASK16 : RDP_TMEM_MASK8;
-        const uint32_t tmemAddress = (loadTile.tmem << 3) & tmemMask;
-        auto hashTMEM = [&](uint32_t tmemOrAddress) {
-            // Too many bytes to hash in a single step. Wrap around TMEM and hash the rest.
-            if ((tmemAddress + bytesToHash) > tmemSize) {
-                const uint32_t firstBytes = std::min(bytesToHash, std::max(tmemSize - tmemAddress, 0U));
-                XXH3_64bits_update(&xxh3, &TMEM[tmemAddress | tmemOrAddress], firstBytes);
-                XXH3_64bits_update(&xxh3, &TMEM[tmemOrAddress], std::min(bytesToHash - firstBytes, tmemAddress));
-            }
-            // Hash as normal.
-            else {
-                XXH3_64bits_update(&xxh3, &TMEM[tmemAddress | tmemOrAddress], bytesToHash);
-            }
-        };
-
-        hashTMEM(0x0);
-
-        if (RGBA32) {
-            hashTMEM(tmemSize);
-        }
-
-        // If TLUT is active, we also hash the corresponding palette bytes.
-        if (tlut > 0) {
-            const bool CI4 = (loadTile.siz == G_IM_SIZ_4b);
-            const int32_t paletteOffset = CI4 ? (loadTile.palette << 7) : 0;
-            const int32_t bytesToHash = CI4 ? 0x80 : 0x800;
-            const int32_t paletteAddress = (RDP_TMEM_BYTES >> 1) + paletteOffset;
-            XXH3_64bits_update(&xxh3, &TMEM[paletteAddress], bytesToHash);
-        }
-
-        // Encode more parameters into the hash that affect the final RGBA32 output.
-        XXH3_64bits_update(&xxh3, &width, sizeof(width));
-        XXH3_64bits_update(&xxh3, &height, sizeof(height));
-        XXH3_64bits_update(&xxh3, &tlut, sizeof(tlut));
-        XXH3_64bits_update(&xxh3, &loadTile.line, sizeof(loadTile.line));
-        XXH3_64bits_update(&xxh3, &loadTile.siz, sizeof(loadTile.siz));
-        XXH3_64bits_update(&xxh3, &loadTile.fmt, sizeof(loadTile.fmt));
-
-        const uint64_t hash = XXH3_64bits_digest(&xxh3);
+        uint64_t hash = TMEMHasher::hash(TMEM, loadTile, width, height, tlut, TMEMHasher::CurrentHashVersion);
         if (hashSet.find(hash) == hashSet.end()) {
             hashSet.insert(hash);
             textureCache->queueGPUUploadTMEM(hash, creationFrame, TMEM, RDP_TMEM_BYTES, width, height, tlut, loadTile, true);
@@ -106,9 +66,9 @@ namespace RT64 {
         dumpedSet.insert(hash);
         
         // Dump the entirety of TMEM.
-        char hexStr[64];
-        snprintf(hexStr, sizeof(hexStr), "%016llx", hash);
-        std::filesystem::path dumpTmemPath = state->dumpingTexturesDirectory / (std::string(hexStr) + ".tmem");
+        char baseName[64];
+        snprintf(baseName, sizeof(baseName), "%016llx.v%u", hash, TMEMHasher::CurrentHashVersion);
+        std::filesystem::path dumpTmemPath = state->dumpingTexturesDirectory / (std::string(baseName) + ".tmem");
         std::ofstream dumpTmemStream(dumpTmemPath, std::ios::binary);
         if (dumpTmemStream.is_open()) {
             const char *TMEM = reinterpret_cast<const char *>(state->rdp->TMEM);
@@ -126,6 +86,9 @@ namespace RT64 {
             uint32_t wordCount = ((loadOp.tile.lrs - loadOp.tile.uls) >> (4 - loadOp.tile.siz)) + 1;
             rdramStart = loadOp.texture.address + commonBytesOffset + commonBytesPerRow * loadOp.tile.ult;
             rdramCount = (wordCount << 3);
+
+            // Increase the amount of RDRAM dumped by textures that require padding when using load block.
+            commonBytesPerRow = std::max(commonBytesPerRow, uint32_t(loadTile.line) << 3U);
         }
         else if (loadOp.type == LoadOperation::Type::Tile) {
             uint32_t rowCount = 1 + ((loadOp.tile.lrt >> 2) - (loadOp.tile.ult >> 2));
@@ -140,7 +103,7 @@ namespace RT64 {
         rdramCount = std::max(rdramCount, std::max(loadTileBpr, commonBytesPerRow) * height);
 
         if (rdramCount > 0) {
-            std::filesystem::path dumpRdramPath = state->dumpingTexturesDirectory / (std::string(hexStr) + ".rice.rdram");
+            std::filesystem::path dumpRdramPath = state->dumpingTexturesDirectory / (std::string(baseName) + ".rice.rdram");
             std::ofstream dumpRdramStream(dumpRdramPath, std::ios::binary);
             if (dumpRdramStream.is_open()) {
                 const char *RDRAM = reinterpret_cast<const char *>(state->RDRAM);
@@ -148,7 +111,7 @@ namespace RT64 {
                 dumpRdramStream.close();
             }
 
-            std::filesystem::path dumpRdramInfoPath = state->dumpingTexturesDirectory / (std::string(hexStr) + ".rice.json");
+            std::filesystem::path dumpRdramInfoPath = state->dumpingTexturesDirectory / (std::string(baseName) + ".rice.json");
             std::ofstream dumpRdramInfoStream(dumpRdramInfoPath);
             if (dumpRdramInfoStream.is_open()) {
                 json jroot;
@@ -172,7 +135,7 @@ namespace RT64 {
             uint32_t paletteRdramStart = paletteLoadOp.texture.address + paletteBytesOffset + paletteBytesPerRow * (paletteLoadOp.tile.ult >> 2);
             uint32_t paletteRdramCount = (rowCount - 1) * paletteBytesPerRow + (wordsPerRow << 3);
             if (paletteRdramCount > 0) {
-                std::filesystem::path dumpPaletteRdramPath = state->dumpingTexturesDirectory / (std::string(hexStr) + ".rice.palette.rdram");
+                std::filesystem::path dumpPaletteRdramPath = state->dumpingTexturesDirectory / (std::string(baseName) + ".rice.palette.rdram");
                 std::ofstream dumpPaletteRdramStream(dumpPaletteRdramPath, std::ios::binary);
                 if (dumpPaletteRdramStream.is_open()) {
                     const char *RDRAM = reinterpret_cast<const char *>(state->RDRAM);
@@ -181,7 +144,7 @@ namespace RT64 {
                 }
             }
 
-            std::filesystem::path dumpPaletteRdramInfoPath = state->dumpingTexturesDirectory / (std::string(hexStr) + ".rice.palette.json");
+            std::filesystem::path dumpPaletteRdramInfoPath = state->dumpingTexturesDirectory / (std::string(baseName) + ".rice.palette.json");
             std::ofstream dumpPaletteRdramInfoStream(dumpPaletteRdramInfoPath);
             if (dumpPaletteRdramInfoStream.is_open()) {
                 json jroot;
@@ -194,7 +157,7 @@ namespace RT64 {
         }
 
         // Dump the parameters of the tile into a JSON file.
-        std::filesystem::path dumpTilePath = state->dumpingTexturesDirectory / (std::string(hexStr) + ".tile.json");
+        std::filesystem::path dumpTilePath = state->dumpingTexturesDirectory / (std::string(baseName) + ".tile.json");
         std::ofstream dumpTileStream(dumpTilePath);
         if (dumpTileStream.is_open()) {
             json jroot;

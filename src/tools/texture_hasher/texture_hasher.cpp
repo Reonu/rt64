@@ -5,13 +5,17 @@
 #include <filesystem>
 #include <fstream>
 
+#include "../../contrib/xxHash/xxh3.h"
 #include "../../common/rt64_load_types.cpp"
 #include "../../common/rt64_replacement_database.cpp"
 #include "../../shared/rt64_f3d_defines.h"
+#include "../../common/rt64_tmem_hasher.h"
 
 static const std::string TileInfoExtension = ".tile.json";
+static const std::string TMEMExtension = ".tmem";
 static const std::string RiceInfoExtension = ".rice.json";
 static const std::string RiceRdramExtension = ".rice.rdram";
+static const std::string RicePaletteInfoExtension = ".rice.palette.json";
 static const std::string RicePaletteRdramExtension = ".rice.palette.rdram";
 
 bool endsWith(const std::string &str, const std::string &end) {
@@ -26,6 +30,10 @@ bool endsWith(const std::string &str, const std::string &end) {
 bool loadTileInfoFromFile(const std::filesystem::path &directory, const std::string &hashName, RT64::LoadTile &tile, RT64::LoadTLUT &tlut, uint32_t &width, uint32_t &height) {
     try {
         std::filesystem::path infoPath = directory / (hashName + TileInfoExtension);
+        if (!std::filesystem::exists(infoPath)) {
+            return false;
+        }
+
         std::ifstream infoStream(infoPath);
         json jroot;
         infoStream >> jroot;
@@ -51,6 +59,10 @@ bool loadTileInfoFromFile(const std::filesystem::path &directory, const std::str
 bool loadOperationInfoFromFile(const std::filesystem::path &directory, const std::string &hashName, RT64::LoadOperation &loadOp) {
     try {
         std::filesystem::path infoPath = directory / (hashName + RiceInfoExtension);
+        if (!std::filesystem::exists(infoPath)) {
+            return false;
+        }
+
         std::ifstream infoStream(infoPath);
         json jroot;
         infoStream >> jroot;
@@ -86,21 +98,64 @@ bool loadBytesFromFile(const std::filesystem::path &path, std::vector<uint8_t> &
     }
 }
 
-void addRiceHash(const std::filesystem::path &directory, const std::string &hashName, RT64::ReplacementDatabase &database) {
+uint32_t toHashTLUT(RT64::LoadTLUT drawTLUT) {
+    switch (drawTLUT) {
+    case RT64::LoadTLUT::RGBA16:
+        return G_TT_RGBA16;
+    case RT64::LoadTLUT::IA16:
+        return G_TT_IA16;
+    default:
+        return 0;
+    }
+}
+
+void renameFile(const std::filesystem::path &directory, const std::string &oldHashName, const std::string &newHashName, const std::string &suffix) {
+    const std::filesystem::path oldPath = directory / (oldHashName + suffix);
+    if (!std::filesystem::exists(oldPath)) {
+        return;
+    }
+    
+    const std::filesystem::path newPath = directory / (newHashName + suffix);
+    if (std::filesystem::exists(newPath)) {
+        fprintf(stderr, "Can't rename %s%s to %s%s because it already exists.\n", oldHashName.c_str(), suffix.c_str(), newHashName.c_str(), suffix.c_str());
+        return;
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(oldPath, newPath, ec);
+    if (ec) {
+        fprintf(stderr, "Failed to rename %s%s to %s%s.\n", oldHashName.c_str(), suffix.c_str(), newHashName.c_str(), suffix.c_str());
+    }
+}
+
+void renameFiles(const std::filesystem::path &directory, const std::string &oldHashName, const std::string &newHashName) {
+    if (oldHashName == newHashName) {
+        return;
+    }
+
+    renameFile(directory, oldHashName, newHashName, TileInfoExtension);
+    renameFile(directory, oldHashName, newHashName, TMEMExtension);
+    renameFile(directory, oldHashName, newHashName, RiceInfoExtension);
+    renameFile(directory, oldHashName, newHashName, RiceRdramExtension);
+    renameFile(directory, oldHashName, newHashName, RicePaletteInfoExtension);
+    renameFile(directory, oldHashName, newHashName, RicePaletteRdramExtension);
+}
+
+void addRiceHash(const std::filesystem::path &directory, const std::string &hashNameWithSuffix, RT64::ReplacementDatabase &database) {
     RT64::LoadTile drawTile = {};
     RT64::LoadTLUT drawTLUT;
     uint32_t drawWidth, drawHeight;
-    if (!loadTileInfoFromFile(directory, hashName, drawTile, drawTLUT, drawWidth, drawHeight)) {
+    if (!loadTileInfoFromFile(directory, hashNameWithSuffix, drawTile, drawTLUT, drawWidth, drawHeight)) {
         return;
     }
 
     RT64::LoadOperation loadOp = {};
-    if (!loadOperationInfoFromFile(directory, hashName, loadOp)) {
+    if (!loadOperationInfoFromFile(directory, hashNameWithSuffix, loadOp)) {
         return;
     }
 
     std::vector<uint8_t> rdramBytes;
-    if (!loadBytesFromFile(directory / (hashName + RiceRdramExtension), rdramBytes)) {
+    if (!loadBytesFromFile(directory / (hashNameWithSuffix + RiceRdramExtension), rdramBytes)) {
         return;
     }
 
@@ -274,19 +329,53 @@ void addRiceHash(const std::filesystem::path &directory, const std::string &hash
     };
 
     if ((height * bpl) > rdramBytes.size()) {
-        fprintf(stderr, "Unable to hash %s. Expected %d but got %llu (%dX%d).\n", hashName.c_str(), height * bpl, rdramBytes.size(), width, height);
+        fprintf(stderr, "Unable to hash %s. Expected %d but got %llu (%dX%d).\n", hashNameWithSuffix.c_str(), height * bpl, rdramBytes.size(), width, height);
         return;
     }
 
+    // Extract the version from the hash name with the suffix.
+    const size_t vPos = hashNameWithSuffix.find_first_of(".v");
+    bool redoHash = false;
+    if (vPos != std::string::npos) {
+        size_t dotAfterVPos = hashNameWithSuffix.find_first_of(".", vPos + 1);
+        if (dotAfterVPos != std::string::npos) {
+            int versionFromName = std::stoi(hashNameWithSuffix.substr(vPos, dotAfterVPos - vPos));
+            if (versionFromName != RT64::TMEMHasher::CurrentHashVersion) {
+                redoHash = true;
+            }
+        }
+        else {
+            redoHash = true;
+        }
+    }
+    else {
+        redoHash = true;
+    }
+
+    // Redo the hash if necessary by loading from TMEM.
+    std::string currentHashName;
+    if (redoHash) {
+        std::vector<uint8_t> tmemBytes;
+        if (!loadBytesFromFile(directory / (hashNameWithSuffix + TMEMExtension), tmemBytes)) {
+            return;
+        }
+
+        const uint64_t hash = RT64::TMEMHasher::hash(tmemBytes.data(), drawTile, drawWidth, drawHeight, toHashTLUT(drawTLUT), RT64::TMEMHasher::CurrentHashVersion);
+        currentHashName = RT64::ReplacementDatabase::hashToString(hash);
+    }
+    else {
+        currentHashName = currentHashName.substr(0, vPos);
+    }
+
     uint32_t riceCrc = RiceCRC32(rdramBytes.data(), width, height, drawTile.siz, bpl);
-    RT64::ReplacementTexture replacement = database.getReplacement(hashName);
-    replacement.hashes.rt64v1 = hashName;
+    RT64::ReplacementTexture replacement = database.getReplacement(currentHashName);
+    replacement.hashes.rt64 = currentHashName;
     replacement.hashes.rice = RT64::ReplacementDatabase::hashToString(riceCrc) + "#" + std::to_string(drawTile.fmt) + "#" + std::to_string(drawTile.siz);
 
     // Add the palette hash if necessary.
     std::vector<uint8_t> paletteBytes;
     if (drawTLUT != RT64::LoadTLUT::None) {
-        if (!loadBytesFromFile(directory / (hashName + RicePaletteRdramExtension), paletteBytes)) {
+        if (!loadBytesFromFile(directory / (hashNameWithSuffix + RicePaletteRdramExtension), paletteBytes)) {
             return;
         }
 
@@ -305,11 +394,55 @@ void addRiceHash(const std::filesystem::path &directory, const std::string &hash
     }
 
     database.addReplacement(replacement);
+
+    if (redoHash) {
+        const std::string newVersionSuffix = ".v" + std::to_string(RT64::TMEMHasher::CurrentHashVersion);
+        renameFiles(directory, hashNameWithSuffix, currentHashName + newVersionSuffix);
+    }
+}
+
+void upgradeHash(const std::filesystem::path &directory, const std::string oldHashName, RT64::ReplacementDatabase &database) {
+    RT64::ReplacementTexture replacement = database.getReplacement(oldHashName);
+    if (replacement.isEmpty()) {
+        return;
+    }
+    
+    RT64::LoadTile drawTile = {};
+    RT64::LoadTLUT drawTLUT;
+    uint32_t drawWidth, drawHeight;
+    const std::string oldVersionSuffix = (database.config.hashVersion > 1) ? (".v" + std::to_string(database.config.hashVersion)) : "";
+    if (!loadTileInfoFromFile(directory, oldHashName + oldVersionSuffix, drawTile, drawTLUT, drawWidth, drawHeight)) {
+        return;
+    }
+
+    std::vector<uint8_t> tmemBytes;
+    if (!loadBytesFromFile(directory / (oldHashName + oldVersionSuffix + TMEMExtension), tmemBytes)) {
+        return;
+    }
+    
+    const uint64_t hash = RT64::TMEMHasher::hash(tmemBytes.data(), drawTile, drawWidth, drawHeight, toHashTLUT(drawTLUT), RT64::TMEMHasher::CurrentHashVersion);
+    const std::string newHashName = RT64::ReplacementDatabase::hashToString(hash);
+    if (oldHashName != newHashName) {
+        database.fixReplacement(oldHashName, replacement);
+        fprintf(stdout, "Updated %s to %s in database.\n", oldHashName.c_str(), newHashName.c_str());
+
+        const std::string newVersionSuffix = ".v" + std::to_string(RT64::TMEMHasher::CurrentHashVersion);
+        renameFiles(directory, oldHashName + oldVersionSuffix, newHashName + newVersionSuffix);
+    }
+}
+
+void showHelp() {
+    fprintf(stderr, 
+        "texture_hasher <path> --rice\n"
+        "\tGenerate Rice matches based on the dumped textures.\n\n"
+        "texture_hasher <path> --upgrade\n"
+        "\tUpgrade the database to the latest version. Will recalculate any hashes as necessary.\n\n"
+    );
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        fprintf(stderr, "Specify the path where you want to run the hasher as the first argument.");
+    if (argc < 3) {
+        showHelp();
         return 1;
     }
 
@@ -318,6 +451,29 @@ int main(int argc, char *argv[]) {
         std::string u8string = searchDirectory.u8string();
         fprintf(stderr, "The directory %s does not exist.", u8string.c_str());
         return 1;
+    }
+
+    enum class Mode {
+        Rice,
+        Upgrade
+    };
+
+    Mode mode = Mode::Rice;
+    if (argc > 2) {
+        std::string modeString = argv[2];
+        if ((modeString == "--upgrade") || (modeString == "-u")) {
+            fprintf(stdout, "Upgrading database to latest hash version.\n");
+            mode = Mode::Upgrade;
+        }
+        else if ((modeString == "--rice") || (modeString == "-r")) {
+            fprintf(stdout, "Generating Rice hashes for files in the directory.\n");
+            mode = Mode::Rice;
+        }
+        else {
+            fprintf(stderr, "Unrecognized argument %s.\n\n", modeString.c_str());
+            showHelp();
+            return 1;
+        }
     }
 
     RT64::ReplacementDatabase database;
@@ -343,14 +499,41 @@ int main(int argc, char *argv[]) {
             }
         }
     }
+    else if (mode == Mode::Upgrade) {
+        fprintf(stderr, "Database file rt64.json is missing.\n");
+        return 1;
+    }
 
-    for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(searchDirectory)) {
-        if (entry.is_regular_file()) {
-            const std::string filename = entry.path().filename().u8string();
-            if (endsWith(filename, RiceInfoExtension)) {
-                addRiceHash(searchDirectory, filename.substr(0, filename.size() - RiceInfoExtension.size()), database);
+    if (mode == Mode::Rice) {
+        if (database.config.hashVersion < RT64::TMEMHasher::CurrentHashVersion) {
+            fprintf(stderr, "Database hash version (%u) is older than texture hasher's version (%u). Upgrade it first using the --upgrade command.\n", database.config.hashVersion, RT64::TMEMHasher::CurrentHashVersion);
+            return 1;
+        }
+
+        for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(searchDirectory)) {
+            if (entry.is_regular_file()) {
+                const std::string filename = entry.path().filename().u8string();
+                if (endsWith(filename, RiceInfoExtension)) {
+                    addRiceHash(searchDirectory, filename.substr(0, filename.size() - RiceInfoExtension.size()), database);
+                }
             }
         }
+    }
+    else if (mode == Mode::Upgrade) {
+        if (database.config.hashVersion > RT64::TMEMHasher::CurrentHashVersion) {
+            fprintf(stderr, "Database hash version (%u) is newer than texture hasher's version (%u).\n", database.config.hashVersion, RT64::TMEMHasher::CurrentHashVersion);
+            return 1;
+        }
+        else if (database.config.hashVersion == RT64::TMEMHasher::CurrentHashVersion) {
+            fprintf(stderr, "Database hash version is already up to date.\n");
+            return 1;
+        }
+
+        for (RT64::ReplacementTexture &texture : database.textures) {
+            upgradeHash(searchDirectory, texture.hashes.rt64, database);
+        }
+
+        database.config.hashVersion = RT64::TMEMHasher::CurrentHashVersion;
     }
 
     // Save new database file.

@@ -53,7 +53,6 @@ namespace RT64 {
         ReplacementDatabase db;
         std::vector<Texture *> loadedTextures;
         std::vector<Texture *> evictedTextures;
-        std::vector<uint64_t> loadedTexturePathHash;
         std::unordered_map<uint64_t, uint32_t> pathHashToLoadMap;
         std::unordered_map<uint64_t, std::string> autoPathMap;
         std::filesystem::path directoryPath;
@@ -72,7 +71,8 @@ namespace RT64 {
     };
 
     struct ReplacementCheck {
-        uint64_t hash = 0;
+        uint64_t textureHash = 0;
+        uint64_t databaseHash = 0;
         uint32_t minMipWidth = 0;
         uint32_t minMipHeight = 0;
     };

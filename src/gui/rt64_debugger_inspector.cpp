@@ -8,9 +8,11 @@
 #include <cinttypes>
 
 #include "imgui/imgui.h"
+#include "xxHash/xxh3.h"
 
 #include "common/rt64_common.h"
 #include "common/rt64_math.h"
+#include "common/rt64_tmem_hasher.h"
 #include "hle/rt64_color_converter.h"
 #include "hle/rt64_vi.h"
 #include "gbi/rt64_f3d.h"
@@ -158,6 +160,7 @@ namespace RT64 {
     
     void DebuggerInspector::inspect(const VI &vi, Workload &workload, FramebufferManager &fbManager, TextureCache &textureCache, DrawCallKey &outDrawCallKey, bool &outCreateDrawCallKey, RenderWindow window) {
         const char ReplaceErrorModalId[32] = "Replace error";
+        const char ReplaceOutdatedModalId[32] = "Replace outdated";
 
         auto textTransformGroup = [](const char *label, const TransformGroup &group) {
             ImGui::Text("%s", label);
@@ -1081,14 +1084,20 @@ namespace RT64 {
                                             ImGui::SameLine();
 
                                             if (ImGui::Button("Replace")) {
-                                                std::filesystem::path textureFilename = FileDialog::getOpenFilename({ FileFilter("Image Files", "dds,png") });
-                                                if (!textureFilename.empty()) {
-                                                    std::filesystem::path relativePath = std::filesystem::relative(textureFilename, textureCache.textureMap.replacementMap.directoryPath);
-                                                    if (!relativePath.empty()) {
-                                                        textureCache.addReplacement(callTile.tmemHashOrID, relativePath.u8string());
-                                                    }
-                                                    else {
-                                                        ImGui::OpenPopup(ReplaceErrorModalId);
+                                                const uint32_t hashVersion = textureCache.textureMap.replacementMap.db.config.hashVersion;
+                                                if (hashVersion < TMEMHasher::CurrentHashVersion) {
+                                                    ImGui::OpenPopup(ReplaceOutdatedModalId);
+                                                }
+                                                else {
+                                                    std::filesystem::path textureFilename = FileDialog::getOpenFilename({ FileFilter("Image Files", "dds,png") });
+                                                    if (!textureFilename.empty()) {
+                                                        std::filesystem::path relativePath = std::filesystem::relative(textureFilename, textureCache.textureMap.replacementMap.directoryPath);
+                                                        if (!relativePath.empty()) {
+                                                            textureCache.addReplacement(callTile.tmemHashOrID, relativePath.u8string());
+                                                        }
+                                                        else {
+                                                            ImGui::OpenPopup(ReplaceErrorModalId);
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1097,6 +1106,26 @@ namespace RT64 {
 
                                             if (ImGui::Button("Copy XXH3")) {
                                                 ImGui::SetClipboardText(hexStr);
+                                            }
+
+                                            if (ImGui::BeginPopupModal(ReplaceErrorModalId)) {
+                                                ImGui::Text("The texture must be relative to the current texture pack's directory.");
+
+                                                if (ImGui::Button("Close##replaceError")) {
+                                                    ImGui::CloseCurrentPopup();
+                                                }
+
+                                                ImGui::EndPopup();
+                                            }
+
+                                            if (ImGui::BeginPopupModal(ReplaceOutdatedModalId)) {
+                                                ImGui::Text("The texture database must be upgraded before being able to do manual replacements (use the texture hasher tool).");
+
+                                                if (ImGui::Button("Close##replaceOutdated")) {
+                                                    ImGui::CloseCurrentPopup();
+                                                }
+
+                                                ImGui::EndPopup();
                                             }
                                         }
 
@@ -1481,16 +1510,6 @@ namespace RT64 {
         }
 
         ImGui::EndChild();
-
-        if (ImGui::BeginPopupModal(ReplaceErrorModalId)) {
-            ImGui::Text("The texture must be relative to the current texture pack's directory.");
-
-            if (ImGui::Button("Close##replaceError")) {
-                ImGui::CloseCurrentPopup();
-            }
-
-            ImGui::EndPopup();
-        }
 
         openCall = false;
     }

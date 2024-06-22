@@ -10,20 +10,31 @@ namespace RT64 {
     // ReplacementDatabase
 
     void ReplacementDatabase::addReplacement(const ReplacementTexture &texture) {
-        const uint64_t rt64v1 = stringToHash(texture.hashes.rt64v1);
-        auto it = tmemHashToReplaceMap.find(rt64v1);
+        const uint64_t rt64 = stringToHash(texture.hashes.rt64);
+        auto it = tmemHashToReplaceMap.find(rt64);
         if (it != tmemHashToReplaceMap.end()) {
             textures[it->second] = texture;
         }
         else {
-            tmemHashToReplaceMap[rt64v1] = uint32_t(textures.size());
+            tmemHashToReplaceMap[rt64] = uint32_t(textures.size());
             textures.emplace_back(texture);
         }
     }
 
+    void ReplacementDatabase::fixReplacement(const std::string &hash, const ReplacementTexture &texture) {
+        const uint64_t rt64Old = stringToHash(hash);
+        const uint64_t rt64New = stringToHash(texture.hashes.rt64);
+        auto it = tmemHashToReplaceMap.find(rt64Old);
+        if (it != tmemHashToReplaceMap.end()) {
+            textures[it->second] = texture;
+            tmemHashToReplaceMap[rt64New] = it->second;
+            tmemHashToReplaceMap.erase(it);
+        }
+    }
+
     ReplacementTexture ReplacementDatabase::getReplacement(const std::string &hash) const {
-        const uint64_t rt64v1 = stringToHash(hash);
-        auto it = tmemHashToReplaceMap.find(rt64v1);
+        const uint64_t rt64 = stringToHash(hash);
+        auto it = tmemHashToReplaceMap.find(rt64);
         if (it != tmemHashToReplaceMap.end()) {
             return textures[it->second];
         }
@@ -37,9 +48,9 @@ namespace RT64 {
 
         for (uint32_t i = 0; i < textures.size(); i++) {
             const ReplacementTexture &texture = textures[i];
-            if (!texture.hashes.rt64v1.empty()) {
-                const uint64_t rt64v1 = stringToHash(texture.hashes.rt64v1);
-                tmemHashToReplaceMap[rt64v1] = i;
+            if (!texture.hashes.rt64.empty()) {
+                const uint64_t rt64 = stringToHash(texture.hashes.rt64);
+                tmemHashToReplaceMap[rt64] = i;
             }
         }
     }
@@ -62,21 +73,29 @@ namespace RT64 {
 
     void to_json(json &j, const ReplacementConfiguration &config) {
         j["autoPath"] = config.autoPath;
+        j["configurationVersion"] = config.configurationVersion;
+        j["hashVersion"] = config.hashVersion;
     }
 
     void from_json(const json &j, ReplacementConfiguration &config) {
         ReplacementConfiguration defaultConfig;
         config.autoPath = j.value("autoPath", defaultConfig.autoPath);
+        config.configurationVersion = j.value("configurationVersion", 1);
+        config.hashVersion = j.value("hashVersion", 1);
     }
 
     void to_json(json &j, const ReplacementHashes &hashes) {
-        j["rt64v1"] = hashes.rt64v1;
+        j["rt64"] = hashes.rt64;
         j["rice"] = hashes.rice;
     }
     
     void from_json(const json &j, ReplacementHashes &hashes) {
         ReplacementHashes defaultHashes;
-        hashes.rt64v1 = j.value("rt64v1", defaultHashes.rt64v1);
+
+        // First version of the replacement database specified the hash version directly in the key name.
+        // Later versions choose to keep the version global to the file and make RT64 the unique key.
+        hashes.rt64 = j.value("rt64v1", defaultHashes.rt64);
+        hashes.rt64 = j.value("rt64", hashes.rt64);
         hashes.rice = j.value("rice", defaultHashes.rice);
     }
 

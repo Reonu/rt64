@@ -8,7 +8,10 @@
 #include "stb/stb_image.h"
 #include "xxHash/xxh3.h"
 
+#include "gbi/rt64_f3d.h"
+#include "common/rt64_load_types.h"
 #include "common/rt64_thread.h"
+#include "common/rt64_tmem_hasher.h"
 #include "hle/rt64_workload_queue.h"
 
 #include "rt64_texture_cache.h"
@@ -37,7 +40,6 @@ namespace RT64 {
         evictedTextures.insert(evictedTextures.end(), loadedTextures.begin(), loadedTextures.end());
         loadedTextures.clear();
         evictedTextures.clear();
-        loadedTexturePathHash.clear();
         pathHashToLoadMap.clear();
     }
 
@@ -106,8 +108,8 @@ namespace RT64 {
                 if (db.config.autoPath == ReplacementAutoPath::Rice) {
                     auto it = ricePathMap.find(texture.hashes.rice);
                     if (it != ricePathMap.end()) {
-                        uint64_t rt64v1 = ReplacementDatabase::stringToHash(texture.hashes.rt64v1);
-                        autoPathMap[rt64v1] = it->second;
+                        uint64_t rt64 = ReplacementDatabase::stringToHash(texture.hashes.rt64);
+                        autoPathMap[rt64] = it->second;
                     }
                 }
             }
@@ -118,8 +120,8 @@ namespace RT64 {
         std::vector<ReplacementTexture> newTextures;
         for (const ReplacementTexture &texture : db.textures) {
             if (texture.path.empty()) {
-                uint64_t rt64v1 = ReplacementDatabase::stringToHash(texture.hashes.rt64v1);
-                auto pathIt = autoPathMap.find(rt64v1);
+                uint64_t rt64 = ReplacementDatabase::stringToHash(texture.hashes.rt64);
+                auto pathIt = autoPathMap.find(rt64);
                 if (pathIt == autoPathMap.end()) {
                     continue;
                 }
@@ -197,7 +199,6 @@ namespace RT64 {
         if (loadedTexture) {
             pathHashToLoadMap[pathHash] = uint32_t(loadedTextures.size());
             loadedTextures.emplace_back(replacementTexture);
-            loadedTexturePathHash.emplace_back(pathHash);
             return replacementTexture;
         }
         else {
@@ -857,28 +858,35 @@ namespace RT64 {
                         }
                         
                         if ((upload.width > 0) && (upload.height > 0)) {
+                            // If the database uses an older hash version, we hash TMEM again with the version corresponding to the database.
+                            uint32_t databaseVersion = textureMap.replacementMap.db.config.hashVersion;
+                            uint64_t databaseHash = upload.hash;
+                            if (databaseVersion < TMEMHasher::CurrentHashVersion) {
+                                databaseHash = TMEMHasher::hash(upload.bytesTMEM.data(), upload.loadTile, upload.width, upload.height, upload.tlut, databaseVersion);
+                            }
+
                             // Add this hash so it's checked for a replacement.
-                            replacementQueueCopy.emplace_back(ReplacementCheck{ upload.hash, uint32_t(upload.width), uint32_t(upload.height) });
+                            replacementQueueCopy.emplace_back(ReplacementCheck{ upload.hash, databaseHash, uint32_t(upload.width), uint32_t(upload.height) });
                         }
                     }
 
                     if (!afterDecodeBarriers.empty()) {
                         worker->commandList->barriers(RenderBarrierStage::COMPUTE, afterDecodeBarriers);
                     }
-
+                    
                     for (const ReplacementCheck &replacementCheck : replacementQueueCopy) {
-                        std::string relativePath = textureMap.replacementMap.getRelativePathFromHash(replacementCheck.hash);
+                        std::string relativePath = textureMap.replacementMap.getRelativePathFromHash(replacementCheck.databaseHash);
                         if (!relativePath.empty()) {
                             std::filesystem::path filePath = textureMap.replacementMap.directoryPath / std::filesystem::u8path(relativePath);
                             Texture *replacementTexture = textureMap.replacementMap.getFromRelativePath(relativePath);
                             if ((replacementTexture == nullptr) && TextureCache::loadBytesFromPath(filePath, replacementBytes)) {
                                 replacementUploadResources.emplace_back();
-                                replacementTexture = textureMap.replacementMap.loadFromBytes(worker, replacementCheck.hash, relativePath, replacementBytes, replacementUploadResources.back(), nullptr, replacementCheck.minMipWidth, replacementCheck.minMipHeight);
+                                replacementTexture = textureMap.replacementMap.loadFromBytes(worker, replacementCheck.databaseHash, relativePath, replacementBytes, replacementUploadResources.back(), nullptr, replacementCheck.minMipWidth, replacementCheck.minMipHeight);
                                 replacementsUploaded = true;
                             }
 
                             if (replacementTexture != nullptr) {
-                                texturesReplaced.emplace_back(HashTexturePair{ replacementCheck.hash, replacementTexture });
+                                texturesReplaced.emplace_back(HashTexturePair{ replacementCheck.textureHash, replacementTexture });
                             }
                         }
                     }
@@ -979,7 +987,7 @@ namespace RT64 {
 
         // Store replacement in the texture pack configuration.
         ReplacementTexture replacement;
-        replacement.hashes.rt64v1 = ReplacementDatabase::hashToString(hash);
+        replacement.hashes.rt64 = ReplacementDatabase::hashToString(hash);
         replacement.path = relativePath;
         textureMap.replacementMap.db.addReplacement(replacement);
 
@@ -1022,7 +1030,7 @@ namespace RT64 {
                         minMipHeight = textureMap.textures[i]->height;
                     }
 
-                    replacementQueue.emplace_back(ReplacementCheck{ textureMap.hashes[i], minMipWidth, minMipHeight });
+                    replacementQueue.emplace_back(ReplacementCheck{ textureMap.hashes[i], textureMap.hashes[i], minMipWidth, minMipHeight });
                 }
             }
         }

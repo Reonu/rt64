@@ -45,10 +45,12 @@ namespace RT64 {
 
     struct ReplacementConfiguration {
         ReplacementAutoPath autoPath = ReplacementAutoPath::RT64;
+        uint32_t configurationVersion = 2;
+        uint32_t hashVersion = 2;
     };
 
     struct ReplacementHashes {
-        std::string rt64v1;
+        std::string rt64;
         std::string rice;
     };
 
@@ -59,7 +61,7 @@ namespace RT64 {
         ReplacementHashes hashes;
 
         bool isEmpty() const {
-            return path.empty();
+            return hashes.rt64.empty();
         }
     };
 
@@ -69,6 +71,7 @@ namespace RT64 {
         std::unordered_map<uint64_t, uint32_t> tmemHashToReplaceMap;
 
         void addReplacement(const ReplacementTexture &texture);
+        void fixReplacement(const std::string &hash, const ReplacementTexture &texture);
         ReplacementTexture getReplacement(const std::string &hash) const;
         void buildHashMaps();
         static uint64_t stringToHash(const std::string &str);
