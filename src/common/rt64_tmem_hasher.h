@@ -17,7 +17,7 @@ namespace RT64 {
             return tmemBytesPerRow > drawBytesPerRow;
         }
 
-        static uint64_t hash(const uint8_t *TMEM, const LoadTile &loadTile, uint32_t width, uint32_t height, uint32_t tlut, uint32_t version) {
+        static uint64_t hash(const uint8_t *TMEM, const LoadTile &loadTile, uint16_t width, uint16_t height, uint32_t tlut, uint32_t version) {
             const uint32_t TMEMBytes = 4096;
             const uint32_t TMEMMask8 = 4095;
             const uint32_t TMEMMask16 = 2047;
@@ -25,7 +25,7 @@ namespace RT64 {
             XXH3_64bits_reset(&xxh3);
             const bool RGBA32 = (loadTile.siz == G_IM_SIZ_32b) && (loadTile.fmt == G_IM_FMT_RGBA);
             const uint32_t tmemSize = RGBA32 ? (TMEMBytes >> 1) : TMEMBytes;
-            const uint32_t drawBytesPerRow = std::max(width << (RGBA32 ? G_IM_SIZ_16b : loadTile.siz) >> 1U, 1U);
+            const uint32_t drawBytesPerRow = std::max(uint32_t(width) << (RGBA32 ? G_IM_SIZ_16b : loadTile.siz) >> 1U, 1U);
             const uint32_t drawBytesTotal = (loadTile.line << 3) * (height - 1) + drawBytesPerRow;
             const uint32_t tmemMask = RGBA32 ? TMEMMask16 : TMEMMask8;
             const uint32_t tmemAddress = (loadTile.tmem << 3) & tmemMask;
@@ -71,8 +71,14 @@ namespace RT64 {
                 const int32_t paletteAddress = (TMEMBytes >> 1) + paletteOffset;
                 XXH3_64bits_update(&xxh3, &TMEM[paletteAddress], bytesToHash);
             }
-
+            
             // Encode more parameters into the hash that affect the final RGBA32 output.
+            static_assert(sizeof(width) == 2, "Hash must use 16-bit width.");
+            static_assert(sizeof(height) == 2, "Hash must use 16-bit height.");
+            static_assert(sizeof(tlut) == 4, "Hash must use 32-bit TLUT.");
+            static_assert(sizeof(loadTile.line) == 2, "Hash must use 16-bit line.");
+            static_assert(sizeof(loadTile.siz) == 1, "Hash must use 8-bit siz.");
+            static_assert(sizeof(loadTile.fmt) == 1, "Hash must use 8-bit fmt.");
             XXH3_64bits_update(&xxh3, &width, sizeof(width));
             XXH3_64bits_update(&xxh3, &height, sizeof(height));
             XXH3_64bits_update(&xxh3, &tlut, sizeof(tlut));
