@@ -109,39 +109,54 @@ uint32_t toHashTLUT(RT64::LoadTLUT drawTLUT) {
     }
 }
 
-void renameFile(const std::filesystem::path &directory, const std::string &oldHashName, const std::string &newHashName, const std::string &suffix) {
+struct RenameFile {
+    const std::filesystem::path oldPath;
+    const std::filesystem::path newPath;
+};
+
+void queueRenameFile(const std::filesystem::path &directory, const std::string &oldHashName, const std::string &newHashName, const std::string &suffix, std::list<RenameFile> &renameFileList) {
+    // Skip if the file with the old name doesn't exist.
     const std::filesystem::path oldPath = directory / (oldHashName + suffix);
     if (!std::filesystem::exists(oldPath)) {
         return;
     }
-    
+
+    // Skip if the file with the new name already exists.
     const std::filesystem::path newPath = directory / (newHashName + suffix);
     if (std::filesystem::exists(newPath)) {
-        fprintf(stderr, "Can't rename %s%s to %s%s because it already exists.\n", oldHashName.c_str(), suffix.c_str(), newHashName.c_str(), suffix.c_str());
         return;
     }
 
-    std::error_code ec;
-    std::filesystem::rename(oldPath, newPath, ec);
-    if (ec) {
-        fprintf(stderr, "Failed to rename %s%s to %s%s.\n", oldHashName.c_str(), suffix.c_str(), newHashName.c_str(), suffix.c_str());
-    }
+    renameFileList.push_back({ oldPath, newPath });
 }
 
-void renameFiles(const std::filesystem::path &directory, const std::string &oldHashName, const std::string &newHashName) {
+void queueRenameFiles(const std::filesystem::path &directory, const std::string &oldHashName, const std::string &newHashName, std::list<RenameFile> &renameFileList) {
     if (oldHashName == newHashName) {
         return;
     }
 
-    renameFile(directory, oldHashName, newHashName, TileInfoExtension);
-    renameFile(directory, oldHashName, newHashName, TMEMExtension);
-    renameFile(directory, oldHashName, newHashName, RiceInfoExtension);
-    renameFile(directory, oldHashName, newHashName, RiceRdramExtension);
-    renameFile(directory, oldHashName, newHashName, RicePaletteInfoExtension);
-    renameFile(directory, oldHashName, newHashName, RicePaletteRdramExtension);
+    queueRenameFile(directory, oldHashName, newHashName, TileInfoExtension, renameFileList);
+    queueRenameFile(directory, oldHashName, newHashName, TMEMExtension, renameFileList);
+    queueRenameFile(directory, oldHashName, newHashName, RiceInfoExtension, renameFileList);
+    queueRenameFile(directory, oldHashName, newHashName, RiceRdramExtension, renameFileList);
+    queueRenameFile(directory, oldHashName, newHashName, RicePaletteInfoExtension, renameFileList);
+    queueRenameFile(directory, oldHashName, newHashName, RicePaletteRdramExtension, renameFileList);
 }
 
-void addRiceHash(const std::filesystem::path &directory, const std::string &hashNameWithSuffix, RT64::ReplacementDatabase &database) {
+void executeRenameFiles(const std::list<RenameFile> &renameFileList) {
+    for (const RenameFile &renameFile : renameFileList) {
+        std::error_code ec;
+        std::filesystem::rename(renameFile.oldPath, renameFile.newPath, ec);
+        if (ec) {
+            const std::string oldPathStr = renameFile.oldPath.u8string();
+            const std::string newPathStr = renameFile.newPath.u8string();
+            const std::string messageStr = ec.message();
+            fprintf(stderr, "Failed to rename %s to %s (%s).\n", oldPathStr.c_str(), newPathStr.c_str(), messageStr.c_str());
+        }
+    }
+}
+
+void addRiceHash(const std::filesystem::path &directory, const std::string &hashNameWithSuffix, RT64::ReplacementDatabase &database, std::list<RenameFile> &renameFileList) {
     RT64::LoadTile drawTile = {};
     RT64::LoadTLUT drawTLUT;
     uint32_t drawWidth, drawHeight;
@@ -207,21 +222,20 @@ void addRiceHash(const std::filesystem::path &directory, const std::string &hash
     int bpl;
     int width, height;
     if (loadOp.type == RT64::LoadOperation::Type::Tile) {
-        uint16_t tileWidth = ((loadOp.tile.lrs >> 2) - (loadOp.tile.uls >> 2) + 1) & 0x03FF;
-        uint16_t tileHeight = ((loadOp.tile.lrt >> 2) - (loadOp.tile.ult >> 2) + 1) & 0x03FF;
+        uint16_t tileWidth = (std::max((loadOp.tile.lrs >> 2) - (loadOp.tile.uls >> 2), 0) + 1) & 0x03FF;
+        uint16_t tileHeight = (std::max((loadOp.tile.lrt >> 2) - (loadOp.tile.ult >> 2), 0) + 1) & 0x03FF;
         tileWidth = (loadOp.tile.masks != 0) ? std::min(tileWidth, uint16_t(1U << loadOp.tile.masks)) : tileWidth;
         bpl = loadOp.texture.width << loadOp.texture.siz >> 1;
         width = std::min(tileWidth, loadOp.texture.width);
         if (loadOp.tile.siz > drawTile.siz) {
-            assert(false && "Review");
             width <<= loadOp.tile.siz - drawTile.siz;
         }
 
         height = (loadOp.tile.maskt != 0) ? std::min(tileHeight, uint16_t(1U << loadOp.tile.maskt)) : tileHeight;
     }
     else if (loadOp.type == RT64::LoadOperation::Type::Block) {
-        int tile_width = (drawTile.lrs >> 2) - (drawTile.uls >> 2) + 1;
-        int tile_height = (drawTile.lrt >> 2) - (drawTile.ult >> 2) + 1;
+        int tile_width = std::max((drawTile.lrs >> 2) - (drawTile.uls >> 2), 0) + 1;
+        int tile_height = std::max((drawTile.lrt >> 2) - (drawTile.ult >> 2), 0) + 1;
         int mask_width = (drawTile.masks == 0) ? (tile_width) : (1 << drawTile.masks);
         int mask_height = (drawTile.maskt == 0) ? (tile_height) : (1 << drawTile.maskt);
         bool clamps = (drawTile.masks == 0) || (drawTile.cms & G_TX_CLAMP);
@@ -327,9 +341,11 @@ void addRiceHash(const std::filesystem::path &directory, const std::string &hash
 
         return crc32Ret;
     };
-
-    if ((height * bpl) > rdramBytes.size()) {
-        fprintf(stderr, "Unable to hash %s. Expected %d but got %llu (%dX%d).\n", hashNameWithSuffix.c_str(), height * bpl, rdramBytes.size(), width, height);
+    
+    // Rice expects to hash at least this many bytes, even if it leaks into other parts of RAM.
+    uint32_t expectedSize = (height - 1) * bpl + (width << drawTile.siz >> 1);
+    if (expectedSize > rdramBytes.size()) {
+        fprintf(stderr, "Unable to hash %s. Expected %d bytes but got %llu bytes (%dX%d).\n", hashNameWithSuffix.c_str(), expectedSize, rdramBytes.size(), width, height);
         return;
     }
 
@@ -397,11 +413,11 @@ void addRiceHash(const std::filesystem::path &directory, const std::string &hash
 
     if (redoHash) {
         const std::string newVersionSuffix = ".v" + std::to_string(RT64::TMEMHasher::CurrentHashVersion);
-        renameFiles(directory, hashNameWithSuffix, currentHashName + newVersionSuffix);
+        queueRenameFiles(directory, hashNameWithSuffix, currentHashName + newVersionSuffix, renameFileList);
     }
 }
 
-void upgradeHash(const std::filesystem::path &directory, const std::string oldHashName, RT64::ReplacementDatabase &database) {
+void upgradeHash(const std::filesystem::path &directory, const std::string oldHashName, RT64::ReplacementDatabase &database, std::list<RenameFile> &renameFileList) {
     RT64::ReplacementTexture replacement = database.getReplacement(oldHashName);
     if (replacement.isEmpty()) {
         return;
@@ -427,7 +443,7 @@ void upgradeHash(const std::filesystem::path &directory, const std::string oldHa
         fprintf(stdout, "Updated %s to %s in database.\n", oldHashName.c_str(), newHashName.c_str());
 
         const std::string newVersionSuffix = ".v" + std::to_string(RT64::TMEMHasher::CurrentHashVersion);
-        renameFiles(directory, oldHashName + oldVersionSuffix, newHashName + newVersionSuffix);
+        queueRenameFiles(directory, oldHashName + oldVersionSuffix, newHashName + newVersionSuffix, renameFileList);
     }
 }
 
@@ -504,6 +520,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    std::list<RenameFile> renameFileList;
     if (mode == Mode::Rice) {
         if (database.config.hashVersion < RT64::TMEMHasher::CurrentHashVersion) {
             fprintf(stderr, "Database hash version (%u) is older than texture hasher's version (%u). Upgrade it first using the --upgrade command.\n", database.config.hashVersion, RT64::TMEMHasher::CurrentHashVersion);
@@ -514,7 +531,7 @@ int main(int argc, char *argv[]) {
             if (entry.is_regular_file()) {
                 const std::string filename = entry.path().filename().u8string();
                 if (endsWith(filename, RiceInfoExtension)) {
-                    addRiceHash(searchDirectory, filename.substr(0, filename.size() - RiceInfoExtension.size()), database);
+                    addRiceHash(searchDirectory, filename.substr(0, filename.size() - RiceInfoExtension.size()), database, renameFileList);
                 }
             }
         }
@@ -530,7 +547,7 @@ int main(int argc, char *argv[]) {
         }
 
         for (RT64::ReplacementTexture &texture : database.textures) {
-            upgradeHash(searchDirectory, texture.hashes.rt64, database);
+            upgradeHash(searchDirectory, texture.hashes.rt64, database, renameFileList);
         }
 
         database.config.hashVersion = RT64::TMEMHasher::CurrentHashVersion;
@@ -592,5 +609,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // Once the database has been upgraded successfully, rename all the files that were detected.
+    if (!renameFileList.empty()) {
+        executeRenameFiles(renameFileList);
+    }
+    
     return 0;
 }
